@@ -1,35 +1,53 @@
 const express = require('express');
-const { createPool } = require('mysql2/promise');
+const mysql = require('mysql2/promise');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
-const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
-const compression = require('compression');
+const rateLimit = require('express-rate-limit');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
+const winston = require('winston');
 
 const app = express();
-const { verify, sign } = jwt;
 
-app.use(helmet());
-app.use(compression());
-app.use(express.json());
+const logger = winston.createLogger({
+  level: 'info',
+  transports: [
+    new winston.transports.Console({ format: winston.format.simple() }),
+    new winston.transports.File({ filename: 'combined.log' })
+  ],
+});
 
-const allowedOrigins = process.env.NODE_ENV === 'production' ? ['https://ec360.netlify.app'] : ['http://localhost:4200'];
+const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'MAIL_API_KEY', 'JWT_SECRET', 'SENDGRID_API_KEY'];
+for (const key of REQUIRED_ENVS) {
+  if (!process.env[key]) {
+    logger.error(`❌ Missing environment variable: ${key}`);
+    process.exit(1);
+  }
+}
+
+const allowedOrigins = new Set([process.env.ALLOWED_ORIGIN]);
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('Not allowed by CORS'));
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
   }
 }));
 
-['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'MAIL_USER', 'MAIL_PASS', 'JWT_SECRET'].forEach(key => {
-  if (!process.env[key]) {
-    console.warn(`❌ Missing env: ${key}`);
-  }
-});
+app.use(helmet());
 
-const pool = createPool({
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+app.use(express.json());
+
+const dbConfig = {
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
   password: process.env.DB_PASS,
@@ -38,199 +56,274 @@ const pool = createPool({
   charset: 'utf8mb4',
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
-});
+  queueLimit: 0,
+};
+const pool = mysql.createPool(dbConfig);
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  service: 'SendGrid',
   auth: {
-    user: process.env.MAIL_USER,
-    pass: process.env.MAIL_PASS
-  }
+    user: 'apikey',
+    pass: process.env.SENDGRID_API_KEY,
+  },
 });
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
-});
-app.use(limiter);
+function sendError(res, status, message) {
+  logger.error(message);
+  res.status(status).json({ error: message });
+}
 
-function authenticateToken(req, res, next) {
-  const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) return res.sendStatus(401);
-  verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
+async function authenticateToken(req, res, next) {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return sendError(res, 401, 'Authorization header missing');
+
+    const token = authHeader.split(' ')[1];
+    if (!token) return sendError(res, 401, 'Token missing');
+
+    const user = jwt.verify(token, JWT_SECRET);
     req.user = user;
     next();
-  });
+  } catch (err) {
+    sendError(res, 403, 'Invalid or expired token');
+  }
 }
 
 function requireAdmin(req, res, next) {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Access denied' });
+  if (req.user.role !== 'admin') return sendError(res, 403, 'Access denied');
   next();
+}
+
+function gracefulShutdown(server) {
+  process.on('SIGTERM', () => {
+    logger.info("SIGTERM received. Shutting down...");
+    server.close(() => {
+      logger.info("Server closed.");
+    });
+  });
 }
 
 app.post('/register', async (req, res) => {
   const { full_name, email, password, role } = req.body;
+  if (!full_name || !email || !password) return sendError(res, 400, 'Missing required fields');
+
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const isSuperAdmin = role === 'admin' && email === 'ecloudsm@gmail.com';
     const token = isSuperAdmin ? null : crypto.randomBytes(32).toString('hex');
 
-    pool.query(
-      'INSERT INTO users (full_name, email, password, role, verification_token, is_approved, email_verified) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [
-        full_name,
-        email,
-        hashedPassword,
-        role || 'worker',
-        token,
-        isSuperAdmin ? 1 : 0,
-        isSuperAdmin ? 1 : 0
-      ],
-      (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-
-        if (isSuperAdmin) {
-          return res.json({ message: '✅ Super admin registered, approved, and verified automatically.' });
-        }
-
-        const link = `${baseUrl}/verify-email?token=${token}`;
-        const mailOptions = {
-          from: process.env.MAIL_USER,
-          to: email,
-          subject: 'Verify Your Email',
-          html: `<p>Hello ${full_name},</p><p>Please verify your email by clicking the link below:</p><a href="${link}">Verify Email</a>`
-        };
-
-        transporter.sendMail(mailOptions, (error) => {
-          if (error) return res.status(500).json({ error: 'Failed to send verification email' });
-          res.json({ message: '✅ Registered. Please check your email to verify your account.' });
-        });
-      }
+    const [result] = await pool.execute(
+      `INSERT INTO users (full_name, email, password, role, verification_token, is_approved, email_verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [full_name, email, hashedPassword, role || 'worker', token, isSuperAdmin ? 1 : 0, isSuperAdmin ? 1 : 0]
     );
+
+    if (isSuperAdmin) {
+      return res.json({ message: '✅ Super admin registered, approved, and verified automatically.' });
+    }
+
+    const link = `https://ec360.netlify.app/verify-email?token=${token}`;
+    await transporter.sendMail({
+      from: process.env.MAIL_USER,
+      to: email,
+      subject: 'Verify Your Email',
+      html: `<p>Hello ${full_name},</p><p>Please verify your email by clicking the link below:</p><a href="${link}">Verify Email</a>`,
+    });
+
+    res.json({ message: '✅ Registered. Please check your email to verify your account.' });
   } catch (err) {
-    res.status(500).json({ error: 'Registration error' });
+    if (err.code === 'ER_DUP_ENTRY') {
+      return sendError(res, 409, 'Email already registered');
+    }
+    logger.error(err);
+    sendError(res, 500, 'Registration failed');
   }
 });
 
-app.get('/verify-email', (req, res) => {
+app.get('/verify-email', async (req, res) => {
   const token = req.query.token;
+  if (!token) return sendError(res, 400, 'Verification token missing');
 
-  pool.query('SELECT * FROM users WHERE verification_token = ?', [token], (err, results) => {
-    if (err || results.length === 0) {
-      return res.status(400).json({ error: 'Invalid or expired verification link' });
-    }
+  try {
+    const [rows] = await pool.execute('SELECT * FROM users WHERE verification_token = ?', [token]);
+    if (rows.length === 0) return sendError(res, 400, 'Invalid or expired verification link');
 
-    const user = results[0];
+    const user = rows[0];
+    if (user.email_verified) return sendError(res, 400, 'Email already verified');
 
-    if (user.email_verified) {
-      return res.status(400).json({ error: 'Email already verified' });
-    }
-
-    pool.query(
+    await pool.execute(
       'UPDATE users SET email_verified = 1, verification_token = NULL WHERE id = ?',
-      [user.id],
-      (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: '✅ Email verified successfully. You can now log in.' });
-      }
+      [user.id]
     );
-  });
+
+    res.json({ message: '✅ Email verified successfully. You can now log in.' });
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Verification failed');
+  }
 });
 
-app.post('/login', (req, res) => {
+app.post('/login', async (req, res) => {
   const { email, password } = req.body;
-  pool.query('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (results.length === 0) return res.status(400).json({ error: 'User not found' });
+  if (!email || !password) return sendError(res, 400, 'Missing email or password');
 
-    const user = results[0];
-    if (!user.email_verified) return res.status(403).json({ error: 'Verify email first' });
-    if (!user.is_approved) return res.status(403).json({ error: 'Awaiting admin approval' });
+  try {
+    const [rows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
+    if (rows.length === 0) return sendError(res, 400, 'User not found');
+
+    const user = rows[0];
+    if (!user.email_verified) return sendError(res, 403, 'Verify email first');
+    if (!user.is_approved) return sendError(res, 403, 'Awaiting admin approval');
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ error: 'Invalid password' });
+    if (!isMatch) return sendError(res, 400, 'Invalid password');
 
-    const token = sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
-    res.json({ token, user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role } });
-  });
+    const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '8h' });
+
+    res.json({
+      token,
+      user: { id: user.id, full_name: user.full_name, email: user.email, role: user.role },
+    });
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Login failed');
+  }
 });
 
-app.post('/resend-verification', (req, res) => {
+app.post('/resend-verification', async (req, res) => {
   const { email } = req.body;
-  pool.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (results.length === 0) return res.status(404).json({ error: 'User not found' });
+  if (!email) return sendError(res, 400, 'Email missing');
 
-    const user = results[0];
-    if (user.email_verified) return res.status(400).json({ error: 'Email already verified' });
+  try {
+    const [rows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
+    if (rows.length === 0) return sendError(res, 404, 'User not found');
+
+    const user = rows[0];
+    if (user.email_verified) return sendError(res, 400, 'Email already verified');
 
     const token = crypto.randomBytes(32).toString('hex');
-    pool.query('UPDATE users SET verification_token = ? WHERE id = ?', [token, user.id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
+    await pool.execute('UPDATE users SET verification_token = ? WHERE id = ?', [token, user.id]);
 
-      const link = `${baseUrl}/verify-email?token=${token}`;
-      const mailOptions = {
-        from: process.env.MAIL_USER,
-        to: email,
-        subject: 'Resend Email Verification',
-        html: `<p>Hello ${user.full_name},</p><a href="${link}">Verify Email</a>`
-      };
-
-      transporter.sendMail(mailOptions, (error) => {
-        if (error) return res.status(500).json({ error: 'Failed to send email' });
-        res.json({ message: 'Verification email resent' });
-      });
+    const link = `https://ec360.netlify.app/verify-email?token=${token}`;
+    await transporter.sendMail({
+      from: process.env.MAIL_USER,
+      to: email,
+      subject: 'Resend Email Verification',
+      html: `<p>Hello ${user.full_name},</p><a href="${link}">Verify Email</a>`,
     });
-  });
+
+    res.json({ message: 'Verification email resent' });
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Failed to resend verification email');
+  }
 });
 
-app.post('/forgot-password', (req, res) => {
+app.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiry = new Date(Date.now() + 15 * 60 * 1000);
+  if (!email) return sendError(res, 400, 'Email missing');
 
-  pool.query('SELECT * FROM users WHERE email = ?', [email], (err, results) => {
-    if (err || results.length === 0) return res.status(404).json({ error: 'User not found' });
+  try {
+    const [rows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
+    if (rows.length === 0) return sendError(res, 404, 'User not found');
 
-    pool.query('UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE email = ?', [token, expiry, email], (err2) => {
-      if (err2) return res.status(500).json({ error: 'Failed to set token' });
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiry = new Date(Date.now() + 15 * 60 * 1000);
 
-      const link = `${baseUrl}/reset-password?token=${token}`;
-      const mailOptions = {
-        from: process.env.MAIL_USER,
-        to: email,
-        subject: 'Reset Your Password',
-        html: `<p>Click the link to reset your password:</p><a href="${link}">Reset Password</a>`
-      };
+    await pool.execute(
+      'UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE email = ?',
+      [token, expiry, email]
+    );
 
-      transporter.sendMail(mailOptions, (err3) => {
-        if (err3) return res.status(500).json({ error: 'Failed to send email' });
-        res.json({ message: 'Password reset link sent to email' });
-      });
+    const link = `https://ec360.netlify.app/reset-password?token=${token}`;
+    await transporter.sendMail({
+      from: process.env.MAIL_USER,
+      to: email,
+      subject: 'Reset Your Password',
+      html: `<p>Click the link to reset your password:</p><a href="${link}">Reset Password</a>`,
     });
-  });
+
+    res.json({ message: 'Password reset link sent to email' });
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Failed to send password reset link');
+  }
 });
 
 app.post('/reset-password', async (req, res) => {
   const { token, password } = req.body;
-  const hashedPassword = await bcrypt.hash(password, 10);
+  if (!token || !password) return sendError(res, 400, 'Missing token or password');
 
-  pool.query('SELECT * FROM users WHERE reset_token = ? AND reset_token_expiry > NOW()', [token], (err, results) => {
-    if (err || results.length === 0) return res.status(400).json({ error: 'Invalid or expired token' });
-
-    pool.query(
-      'UPDATE users SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
-      [hashedPassword, results[0].id],
-      (err2) => {
-        if (err2) return res.status(500).json({ error: 'Failed to reset password' });
-        res.json({ message: 'Password reset successful' });
-      }
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const [rows] = await pool.execute(
+      'SELECT * FROM users WHERE reset_token = ? AND reset_token_expiry > NOW()',
+      [token]
     );
-  });
+
+    if (rows.length === 0) return sendError(res, 400, 'Invalid or expired token');
+
+    await pool.execute(
+      'UPDATE users SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
+      [hashedPassword, rows[0].id]
+    );
+
+    res.json({ message: 'Password reset successful' });
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Failed to reset password');
+  }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log(`Server running on port ${process.env.PORT || 3000}`));
+app.get('/admin/pending-users', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const [results] = await pool.execute(
+      'SELECT id, full_name, email, role FROM users WHERE is_approved = 0 AND email_verified = 1'
+    );
+    res.json(results);
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Failed to fetch pending users');
+  }
+});
+
+app.patch('/admin/approve-user/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.execute('UPDATE users SET is_approved = 1 WHERE id = ?', [id]);
+    res.json({ message: 'User approved' });
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Failed to approve user');
+  }
+});
+
+app.delete('/admin/reject-user/:id', authenticateToken, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  if (id === '1') return sendError(res, 403, 'Cannot delete super admin');
+
+  try {
+    const [result] = await pool.execute(
+      'DELETE FROM users WHERE id = ? AND is_approved = 0',
+      [id]
+    );
+    if (result.affectedRows === 0) return sendError(res, 404, 'User not found or already approved');
+    res.json({ message: 'User rejected & deleted' });
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Failed to reject user');
+  }
+});
+
+app.get('/', (req, res) => {
+  res.send('✅ API is running');
+});
+
+const PORT = process.env.PORT || 3000;
+const server = app.listen(PORT, () => {
+  logger.info(`🚀 Server running on port ${PORT}`);
+});
+
+gracefulShutdown(server);
