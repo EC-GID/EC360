@@ -1,0 +1,33 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "auth.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EC-GID/EC360.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/EC-GID/EC360/issues"
+  },
+  "homepage": "https://github.com/EC-GID/EC360#readme",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "compression": "^1.8.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.14.2",
+    "nodemailer": "^7.0.5",
+    "rate-limit": "^0.1.1"
+  }
+}
