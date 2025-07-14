@@ -11,7 +11,9 @@ const winston = require('winston');
 
 const app = express();
 
-const allowedOrigins = new Set(['https://ec360.netlify.app', 'https://6874fbde0624130008f89abe--ec360.netlify.app', 'https://687524c33361650008926cf7--ec360.netlify.app']);
+const allowedOrigins = new Set(['https://ec360.netlify.app', 
+  'https://6874fbde0624130008f89abe--ec360.netlify.app', 
+  'https://687524c33361650008926cf7--ec360.netlify.app']);
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -35,7 +37,8 @@ const logger = winston.createLogger({
   ],
 });
 
-const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'DB_PORT', 'JWT_SECRET', 'MAIL_USER', 'MAIL_PASS'];
+const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 
+  'DB_NAME', 'DB_PORT', 'JWT_SECRET', 'MAIL_USER', 'MAIL_PASS'];
 for (const key of REQUIRED_ENVS) {
   if (!process.env[key]) {
     logger.error(`Missing environment variable: ${key}`);
@@ -118,7 +121,8 @@ app.post('/register', async (req, res) => {
     const isSuperAdmin = role === 'admin' && email === 'ecloudsm@gmail.com';
     const token = isSuperAdmin ? null : crypto.randomBytes(32).toString('hex');
     const [result] = await pool.execute(
-      `INSERT INTO users (full_name, email, password, role, verification_token, is_approved, email_verified)
+      `INSERT INTO users (full_name, email, 
+      password, role, verification_token, is_approved, email_verified)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         full_name,
@@ -448,17 +452,29 @@ function isWeekend(date) {
 app.get('/admin/weekly-payments', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const today = new Date();
-    const endDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 23, 59, 59));
-    const startDate = new Date(endDate);
-    startDate.setUTCDate(endDate.getUTCDate() - 6);
+    const dayOfWeek = today.getUTCDay();
+
+    const diffToMonday = (dayOfWeek === 0 ? 6 : dayOfWeek - 1);
+
+    const startDate = new Date(today);
+    startDate.setUTCDate(today.getUTCDate() - diffToMonday);
+    startDate.setUTCHours(0, 0, 0, 0);
+
+    const endDate = new Date(startDate);
+    endDate.setUTCDate(startDate.getUTCDate() + 6);
+    endDate.setUTCHours(23, 59, 59, 999);
+
+    console.log(`Start Date: ${startDate.toISOString()}`);
+    console.log(`End Date: ${endDate.toISOString()}`);
     const [rows] = await pool.execute(
-      `SELECT u.id AS user_id, u.full_name, SUM(t.duration_minutes) AS total_minutes 
-       FROM time_entries t 
-       JOIN users u ON t.user_id = u.id 
-       WHERE t.check_in BETWEEN ? AND ? 
+      `SELECT u.id AS user_id, u.full_name, SUM(t.duration_minutes) AS total_minutes
+       FROM time_entries t
+       JOIN users u ON t.user_id = u.id
+       WHERE t.check_in BETWEEN ? AND ?
        GROUP BY u.id, u.full_name`,
       [startDate.toISOString(), endDate.toISOString()]
     );
+
     const payments = rows.map(row => {
       const totalHours = (row.total_minutes || 0) / 60;
       const payRate = 5;
@@ -469,6 +485,7 @@ app.get('/admin/weekly-payments', authenticateToken, requireAdmin, async (req, r
         amount_due: (totalHours * payRate).toFixed(2),
       };
     });
+
     res.json(payments);
   } catch (err) {
     logger.error(err);
