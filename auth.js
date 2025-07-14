@@ -11,9 +11,18 @@ const winston = require('winston');
 
 const app = express();
 
+const allowedOrigins = new Set(['https://ec360.netlify.app']);
+
 app.use(cors({
-  origin: '*',
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.has(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  }
 }));
+
+
 
 const logger = winston.createLogger({
   level: 'info',
