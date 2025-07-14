@@ -30,6 +30,8 @@ for (const key of REQUIRED_ENVS) {
 app.use(cors({
     origin: 'https://ec360.netlify.app',
     credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(helmet());
