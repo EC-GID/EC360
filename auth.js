@@ -19,7 +19,7 @@ const logger = winston.createLogger({
   ],
 });
 
-const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'MAIL_HOST', 'MAIL_PORT', 'MAIL_USER', 'MAIL_PASS', 'JWT_SECRET'];
+const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'DB_PORT', 'JWT_SECRET', 'MAIL_USER', 'MAIL_PASS'];
 for (const key of REQUIRED_ENVS) {
   if (!process.env[key]) {
     logger.error(`❌ Missing environment variable: ${key}`);
@@ -52,7 +52,7 @@ const dbConfig = {
   user: process.env.DB_USER,
   password: process.env.DB_PASS,
   database: process.env.DB_NAME,
-  port: process.env.DB_PORT || 3306,
+  port: Number(process.env.DB_PORT),
   charset: 'utf8mb4',
   waitForConnections: true,
   connectionLimit: 10,
@@ -61,8 +61,8 @@ const dbConfig = {
 const pool = mysql.createPool(dbConfig);
 
 const transporter = nodemailer.createTransport({
-  host: process.env.MAIL_HOST,
-  port: Number(process.env.MAIL_PORT) || 587,
+  host: 'smtp.gmail.com',
+  port: 587,
   secure: false,
   auth: {
     user: process.env.MAIL_USER,
@@ -88,7 +88,7 @@ async function authenticateToken(req, res, next) {
     const user = jwt.verify(token, JWT_SECRET);
     req.user = user;
     next();
-  } catch (err) {
+  } catch {
     sendError(res, 403, 'Invalid or expired token');
   }
 }
