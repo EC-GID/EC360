@@ -19,7 +19,7 @@ const logger = winston.createLogger({
   ],
 });
 
-const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'JWT_SECRET', 'SENDGRID_API_KEY', 'MAIL_USER'];
+const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'MAIL_HOST', 'MAIL_PORT', 'MAIL_USER', 'MAIL_PASS', 'JWT_SECRET'];
 for (const key of REQUIRED_ENVS) {
   if (!process.env[key]) {
     logger.error(`❌ Missing environment variable: ${key}`);
@@ -61,10 +61,12 @@ const dbConfig = {
 const pool = mysql.createPool(dbConfig);
 
 const transporter = nodemailer.createTransport({
-  service: 'SendGrid',
+  host: process.env.MAIL_HOST,
+  port: Number(process.env.MAIL_PORT) || 587,
+  secure: false,
   auth: {
-    user: 'apikey',
-    pass: process.env.SENDGRID_API_KEY,
+    user: process.env.MAIL_USER,
+    pass: process.env.MAIL_PASS,
   },
 });
 
