@@ -11,6 +11,14 @@ const winston = require('winston');
 
 const app = express();
 
+app.use(cors({
+  origin: 'https://ec360.netlify.app',
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+
 const logger = winston.createLogger({
   level: 'info',
   transports: [
@@ -26,16 +34,6 @@ for (const key of REQUIRED_ENVS) {
     process.exit(1);
   }
 }
-
-const corsOptions = {
-  origin: 'https://ec360.netlify.app',
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 204
-};
-
-app.use(cors(corsOptions));
 
 app.use(helmet());
 
