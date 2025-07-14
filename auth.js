@@ -27,12 +27,9 @@ for (const key of REQUIRED_ENVS) {
   }
 }
 
-const allowedOrigins = new Set([process.env.ALLOWED_ORIGIN]);
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
-    callback(new Error('Not allowed by CORS'));
-  }
+    origin: 'https://ec360.netlify.app',
+    credentials: true,
 }));
 
 app.use(helmet());
