@@ -11,7 +11,7 @@ const winston = require('winston');
 
 const app = express();
 
-const allowedOrigins = new Set(['https://ec360.netlify.app']);
+const allowedOrigins = new Set(['https://ec360.netlify.app', 'https://6874fbde0624130008f89abe--ec360.netlify.app']);
 
 app.use(cors({
   origin: (origin, callback) => {
