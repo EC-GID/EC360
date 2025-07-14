@@ -18,7 +18,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-
 const logger = winston.createLogger({
   level: 'info',
   transports: [
