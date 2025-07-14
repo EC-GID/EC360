@@ -12,11 +12,7 @@ const winston = require('winston');
 const app = express();
 
 app.use(cors({
-  origin: 'https://ec360.netlify.app',
-  credentials: true,
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+  origin: 'https://ec360.netlify.app'}));
 
 const logger = winston.createLogger({
   level: 'info',
