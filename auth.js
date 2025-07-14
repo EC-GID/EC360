@@ -19,7 +19,7 @@ const logger = winston.createLogger({
   ],
 });
 
-const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'MAIL_API_KEY', 'JWT_SECRET', 'SENDGRID_API_KEY'];
+const REQUIRED_ENVS = ['DB_HOST', 'DB_USER', 'DB_PASS', 'DB_NAME', 'JWT_SECRET', 'SENDGRID_API_KEY', 'MAIL_USER'];
 for (const key of REQUIRED_ENVS) {
   if (!process.env[key]) {
     logger.error(`❌ Missing environment variable: ${key}`);
