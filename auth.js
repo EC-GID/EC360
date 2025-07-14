@@ -8,8 +8,10 @@ const rateLimit = require('express-rate-limit');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const winston = require('winston');
+const axios = require('axios'); // Add axios for making HTTP requests from the backend
 
 const app = express();
+app.set('trust proxy', true);
 
 const allowedOrigins = new Set(['https://ec360.netlify.app', 
   'https://6874fbde0624130008f89abe--ec360.netlify.app', 
@@ -24,10 +26,23 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST','PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type'],
 }));
 
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+}));
 
+axios.get('https://ec360.netlify.app')
+  .then(response => {
+    console.log(response.data);
+  })
+  .catch(error => {
+    console.error('Error making request:', error);
+  });
 
 const logger = winston.createLogger({
   level: 'info',
