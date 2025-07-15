@@ -395,6 +395,14 @@ app.delete('/employees/:id', async (req, res) => {
 
 app.post('/check-in', authenticateToken, async (req, res) => {
   try {
+    const [activeCheckin] = await pool.execute(
+      'SELECT id FROM time_entries WHERE user_id = ? AND check_out IS NULL',
+      [req.user.id]
+    );
+    if (activeCheckin.length > 0) {
+      return sendError(res, 400, 'Already checked in');
+    }
+
     await pool.execute('INSERT INTO time_entries (user_id, check_in) VALUES (?, UTC_TIMESTAMP())', [req.user.id]);
     res.json({ message: 'Checked in' });
   } catch (err) {
@@ -410,6 +418,7 @@ app.post('/check-out', authenticateToken, async (req, res) => {
       [req.user.id]
     );
     if (results.length === 0) return sendError(res, 400, 'No active check-in');
+
     const { id } = results[0];
     await pool.execute(
       `UPDATE time_entries SET check_out = UTC_TIMESTAMP(), duration_minutes = TIMESTAMPDIFF(MINUTE, check_in, UTC_TIMESTAMP()) WHERE id = ?`,
@@ -421,6 +430,7 @@ app.post('/check-out', authenticateToken, async (req, res) => {
     sendError(res, 500, 'Failed to check out');
   }
 });
+
 
 app.get('/my-time-logs', authenticateToken, async (req, res) => {
   try {
