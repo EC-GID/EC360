@@ -18,6 +18,7 @@ const allowedOrigins = new Set([
   'https://6874fbde0624130008f89abe--ec360.netlify.app',
   'https://687524c33361650008926cf7--ec360.netlify.app',
   'https://687665b50d56bd0008b2a0cb--ec360.netlify.app',
+  'https://68766c552c1dc300088e118a--ec360.netlify.app',
   'https://68753a8ef65f14000772e1e6--ec360.netlify.app'
 ]);
 
