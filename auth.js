@@ -15,7 +15,7 @@ app.set('trust proxy', true);
 
 const allowedOrigins = new Set([
   'https://ec360.netlify.app',
-'https://687677943f6f9f000810cadf--ec360.netlify.app'
+'https://68767c44c3223e0008c1bc7f--ec360.netlify.app'
 ]);
 
 
