@@ -9,13 +9,14 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const winston = require('winston');
 const axios = require('axios');
+const cron = require('node-cron');
 
 const app = express();
 app.set('trust proxy', true);
 
 const allowedOrigins = new Set([
   'https://ec360.netlify.app',
-  'https://6876800e0c66070008d33283--ec360.netlify.app'
+  'https://6876a718e09c54000894c36a--ec360.netlify.app'
 ]);
 
 
@@ -129,6 +130,37 @@ function requireAdmin(req, res, next) {
   }
   next();
 }
+
+async function autoCheckoutIfOvertime(userId) {
+  try {
+    const [activeCheckinRows] = await pool.execute(
+      'SELECT id, check_in FROM time_entries WHERE user_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1',
+      [userId]
+    );
+
+    if (activeCheckinRows.length === 0) return;
+
+    const { id, check_in } = activeCheckinRows[0];
+    const now = new Date();
+    const checkInTime = new Date(check_in);
+    const diffMs = now - checkInTime;
+    const diffHours = diffMs / (1000 * 60 * 60);
+
+    if (diffHours >= 8) {
+      await pool.execute(
+        `UPDATE time_entries 
+         SET check_out = UTC_TIMESTAMP(), 
+             duration_minutes = TIMESTAMPDIFF(MINUTE, check_in, UTC_TIMESTAMP()) 
+         WHERE id = ?`,
+        [id]
+      );
+      console.log(`User ${userId} auto-checked out after 8 hours.`);
+    }
+  } catch (err) {
+    logger.error(err);
+  }
+}
+
 
 app.post('/register', async (req, res) => {
   const { full_name, email, password, role } = req.body;
@@ -391,6 +423,7 @@ app.delete('/employees/:id', async (req, res) => {
   }
 });
 
+
 app.post('/check-in', authenticateToken, async (req, res) => {
   try {
     const [activeCheckin] = await pool.execute(
@@ -401,7 +434,10 @@ app.post('/check-in', authenticateToken, async (req, res) => {
       return sendError(res, 400, 'Already checked in');
     }
 
-    await pool.execute('INSERT INTO time_entries (user_id, check_in) VALUES (?, UTC_TIMESTAMP())', [req.user.id]);
+    await pool.execute(
+      'INSERT INTO time_entries (user_id, check_in) VALUES (?, UTC_TIMESTAMP())',
+      [req.user.id]
+    );
     res.json({ message: 'Checked in' });
   } catch (err) {
     logger.error(err);
@@ -412,16 +448,32 @@ app.post('/check-in', authenticateToken, async (req, res) => {
 app.post('/check-out', authenticateToken, async (req, res) => {
   try {
     const [results] = await pool.execute(
-      'SELECT id FROM time_entries WHERE user_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1',
+      'SELECT id, check_in FROM time_entries WHERE user_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1',
       [req.user.id]
     );
+
     if (results.length === 0) return sendError(res, 400, 'No active check-in');
 
-    const { id } = results[0];
+    const { id, check_in } = results[0];
+    const checkInDate = new Date(check_in);
+    const now = new Date();
+    const diffMs = now.getTime() - checkInDate.getTime();
+    const diffMinutes = Math.floor(diffMs / 60000);
+    const maxMinutes = 8 * 60;
+    const actualDuration = Math.min(diffMinutes, maxMinutes);
+
+    const checkOutTime =
+      diffMinutes > maxMinutes
+        ? new Date(checkInDate.getTime() + maxMinutes * 60000)
+        : now;
+
     await pool.execute(
-      `UPDATE time_entries SET check_out = UTC_TIMESTAMP(), duration_minutes = TIMESTAMPDIFF(MINUTE, check_in, UTC_TIMESTAMP()) WHERE id = ?`,
-      [id]
+      `UPDATE time_entries 
+       SET check_out = ?, duration_minutes = ? 
+       WHERE id = ?`,
+      [checkOutTime.toISOString().slice(0, 19).replace('T', ' '), actualDuration, id]
     );
+
     res.json({ message: 'Checked out successfully' });
   } catch (err) {
     logger.error(err);
@@ -429,10 +481,12 @@ app.post('/check-out', authenticateToken, async (req, res) => {
   }
 });
 
-
 app.get('/my-time-logs', authenticateToken, async (req, res) => {
   try {
-    const [results] = await pool.execute('SELECT check_in, check_out, duration_minutes FROM time_entries WHERE user_id = ? ORDER BY check_in DESC', [req.user.id]);
+    const [results] = await pool.execute(
+      'SELECT check_in, check_out, duration_minutes FROM time_entries WHERE user_id = ? ORDER BY check_in DESC',
+      [req.user.id]
+    );
     res.json(results);
   } catch (err) {
     logger.error(err);
