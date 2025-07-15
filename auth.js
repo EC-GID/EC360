@@ -496,6 +496,7 @@ app.get('/admin/weekly-payments', authenticateToken, requireAdmin, async (req, r
 
     console.log(`Start Date: ${startDate.toISOString()}`);
     console.log(`End Date: ${endDate.toISOString()}`);
+
     const [rows] = await pool.execute(
       `SELECT u.id AS user_id, u.full_name, SUM(t.duration_minutes) AS total_minutes
        FROM time_entries t
@@ -516,7 +517,11 @@ app.get('/admin/weekly-payments', authenticateToken, requireAdmin, async (req, r
       };
     });
 
-    res.json(payments);
+    res.json({
+      payments,
+      week_start: startDate.toISOString(),
+      week_end: endDate.toISOString(),
+    });
   } catch (err) {
     logger.error(err);
     sendError(res, 500, 'Failed to fetch weekly payments');
