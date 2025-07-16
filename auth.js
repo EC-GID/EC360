@@ -512,18 +512,29 @@ app.get('/admin/time-logs', authenticateToken, requireAdmin, async (req, res) =>
 app.get('/check-status', authenticateToken, async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    const [results] = await pool.execute('SELECT check_in, check_out FROM time_entries WHERE user_id = ? AND DATE(check_in) = ?', [req.user.id, today]);
-    let checkedIn = false, checkedOut = false;
+    const [results] = await pool.execute(
+      `SELECT check_in, check_out 
+       FROM time_entries 
+       WHERE user_id = ? AND DATE(check_in) = ? 
+       ORDER BY check_in DESC LIMIT 1`,
+      [req.user.id, today]
+    );
+
+    let checkedIn = false;
+    let checkedOut = false;
+
     if (results.length > 0) {
-      checkedIn = true;
+      checkedIn = results[0].check_out === null;
       checkedOut = results[0].check_out !== null;
     }
+
     res.json({ checkedIn, checkedOut });
   } catch (err) {
     logger.error(err);
     sendError(res, 500, 'Failed to check status');
   }
 });
+
 
 function isWeekend(date) {
   const day = date.getUTCDay();
