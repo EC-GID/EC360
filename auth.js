@@ -10,6 +10,8 @@ const crypto = require('crypto');
 const winston = require('winston');
 const axios = require('axios');
 const cron = require('node-cron');
+const rateLimit = require('express-rate-limit');
+
 
 const app = express();
 app.set('trust proxy', true);
@@ -160,7 +162,11 @@ async function autoCheckoutIfOvertime(userId) {
     logger.error(err);
   }
 }
-
+const adminTimeLogsLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 10, // 10 requests per IP per minute
+  message: 'Too many requests from this IP, please try again after a minute.'
+});
 
 app.post('/register', async (req, res) => {
   const { full_name, email, password, role } = req.body;
@@ -426,6 +432,8 @@ app.delete('/employees/:id', async (req, res) => {
 
 app.post('/check-in', authenticateToken, async (req, res) => {
   try {
+    const { latitude, longitude } = req.body;
+
     const [activeCheckin] = await pool.execute(
       'SELECT id FROM time_entries WHERE user_id = ? AND check_out IS NULL',
       [req.user.id]
@@ -435,9 +443,10 @@ app.post('/check-in', authenticateToken, async (req, res) => {
     }
 
     await pool.execute(
-      'INSERT INTO time_entries (user_id, check_in) VALUES (?, UTC_TIMESTAMP())',
-      [req.user.id]
+      'INSERT INTO time_entries (user_id, check_in, latitude, longitude) VALUES (?, UTC_TIMESTAMP(), ?, ?)',
+      [req.user.id, latitude, longitude]
     );
+
     res.json({ message: 'Checked in' });
   } catch (err) {
     logger.error(err);
@@ -447,6 +456,8 @@ app.post('/check-in', authenticateToken, async (req, res) => {
 
 app.post('/check-out', authenticateToken, async (req, res) => {
   try {
+    const { latitude, longitude } = req.body;
+
     const [results] = await pool.execute(
       'SELECT id, check_in FROM time_entries WHERE user_id = ? AND check_out IS NULL ORDER BY check_in DESC LIMIT 1',
       [req.user.id]
@@ -469,9 +480,15 @@ app.post('/check-out', authenticateToken, async (req, res) => {
 
     await pool.execute(
       `UPDATE time_entries 
-       SET check_out = ?, duration_minutes = ? 
+       SET check_out = ?, duration_minutes = ?, latitude = ?, longitude = ? 
        WHERE id = ?`,
-      [checkOutTime.toISOString().slice(0, 19).replace('T', ' '), actualDuration, id]
+      [
+        checkOutTime.toISOString().slice(0, 19).replace('T', ' '),
+        actualDuration,
+        latitude,
+        longitude,
+        id
+      ]
     );
 
     res.json({ message: 'Checked out successfully' });
@@ -480,6 +497,7 @@ app.post('/check-out', authenticateToken, async (req, res) => {
     sendError(res, 500, 'Failed to check out');
   }
 });
+
 
 app.get('/my-time-logs', authenticateToken, async (req, res) => {
   try {
@@ -494,20 +512,36 @@ app.get('/my-time-logs', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/admin/time-logs', authenticateToken, requireAdmin, async (req, res) => {
+app.get('/admin/time-logs', authenticateToken, requireAdmin, adminTimeLogsLimiter, async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const offset = (page - 1) * limit;
+
   try {
     const [results] = await pool.execute(
-      `SELECT t.id, u.full_name, t.check_in, t.check_out, t.duration_minutes 
-       FROM time_entries t 
-       JOIN users u ON t.user_id = u.id 
-       ORDER BY t.check_in DESC`
+      `SELECT t.id, u.full_name, t.check_in, t.check_out, t.duration_minutes, t.latitude, t.longitude
+       FROM time_entries t
+       JOIN users u ON t.user_id = u.id
+       ORDER BY t.check_in DESC
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
     );
-    res.json(results);
+    
+    const [[{ total }]] = await pool.execute('SELECT COUNT(*) AS total FROM time_entries');
+
+    res.json({
+      data: results,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (err) {
     logger.error(err);
     sendError(res, 500, 'Failed to fetch admin time logs');
   }
 });
+
 
 app.get('/check-status', authenticateToken, async (req, res) => {
   try {
