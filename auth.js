@@ -17,7 +17,7 @@ app.set('trust proxy', true);
 
 const allowedOrigins = new Set([
   'https://ec360.netlify.app',
-  'https://687e3bf191ec6a0008e48a4a--ec360.netlify.app'
+  'https://687e3e83951ddf0008716c78--ec360.netlify.app'
 ]);
 
 
@@ -272,16 +272,12 @@ app.post('/resend-verification', async (req, res) => {
 app.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
   if (!email) return sendError(res, 400, 'Email missing');
-  
   try {
     const [rows] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
     if (rows.length === 0) return sendError(res, 404, 'User not found');
-
     const token = crypto.randomBytes(32).toString('hex');
     const expiry = new Date(Date.now() + 15 * 60 * 1000);
-    
     await pool.execute('UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE email = ?', [token, expiry, email]);
-    
     const link = `https://ec360.netlify.app/reset-password?token=${token}`;
     await transporter.sendMail({
       from: process.env.MAIL_USER,
@@ -289,11 +285,25 @@ app.post('/forgot-password', async (req, res) => {
       subject: 'Reset Your Password',
       html: `<p>Click the link to reset your password:</p><a href="${link}">Reset Password</a>`,
     });
-    
     res.json({ message: 'Password reset link sent to email' });
   } catch (err) {
     logger.error(err);
     sendError(res, 500, 'Failed to send password reset link');
+  }
+});
+
+app.post('/reset-password', async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password) return sendError(res, 400, 'Missing token or password');
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const [rows] = await pool.execute('SELECT * FROM users WHERE reset_token = ? AND reset_token_expiry > NOW()', [token]);
+    if (rows.length === 0) return sendError(res, 400, 'Invalid or expired token');
+    await pool.execute('UPDATE users SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?', [hashedPassword, rows[0].id]);
+    res.json({ message: 'Password reset successful' });
+  } catch (err) {
+    logger.error(err);
+    sendError(res, 500, 'Failed to reset password');
   }
 });
 
