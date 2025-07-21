@@ -10,7 +10,6 @@ const crypto = require('crypto');
 const winston = require('winston');
 const axios = require('axios');
 const cron = require('node-cron');
-const rateLimit = require('express-rate-limit');
 
 
 const app = express();
@@ -163,8 +162,8 @@ async function autoCheckoutIfOvertime(userId) {
   }
 }
 const adminTimeLogsLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 10, // 10 requests per IP per minute
+  windowMs: 1 * 60 * 1000,
+  max: 10,
   message: 'Too many requests from this IP, please try again after a minute.'
 });
 
